@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Market AI Mobile</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#070b11;color:#edf2f7;font-family:system-ui,-apple-system,Segoe UI,sans-serif}.wrap{max-width:900px;margin:auto;padding:18px}.head{margin:4px 0 18px}.head h1{margin:0;font-size:28px}.muted{color:#94a3b8}.bar{display:flex;gap:10px}.bar input{flex:1;min-width:0;background:#111923;border:1px solid #263445;color:#fff;border-radius:14px;padding:16px;font-size:18px}.btn{border:0;border-radius:14px;padding:0 20px;background:#7c22e8;color:#fff;font-size:17px;font-weight:700}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:16px}.card{background:#0f1721;border:1px solid #202d3d;border-radius:18px;padding:18px}.label{color:#94a3b8;font-size:14px}.value{font-size:30px;font-weight:750;margin-top:4px}.buy{color:#00e58b}.sell{color:#ff5c70}.hold{color:#ffd166}.chart{height:360px}.row{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.small{font-size:15px}.chatbox{display:flex;gap:8px;margin-top:10px}.chatbox input{flex:1;background:#111923;border:1px solid #263445;color:#fff;border-radius:12px;padding:13px}.chat{background:#0b121b;border-radius:12px;padding:12px;margin-top:10px;line-height:1.5}.list{line-height:1.8}.notice{font-size:12px;color:#7f8ea3;margin-top:16px}@media(max-width:620px){.wrap{padding:12px}.grid{grid-template-columns:1fr 1fr}.value{font-size:25px}.bar .btn{padding:0 14px}.chart{height:290px}.row{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="head"><h1>📈 Market AI Mobile</h1><div class="muted">Technical analysis • Charts • Signals • Backtest • Chat</div></div>
+<div class="bar"><input id="symbol" value="TCIEXP" placeholder="NSE symbol e.g. TCS, RELIANCE"><button class="btn" onclick="analyse()">Analyse</button></div>
+<div id="status" class="muted" style="margin-top:12px"></div>
+<div class="grid">
+<div class="card"><div class="label">PRICE</div><div id="price" class="value">—</div><div class="muted">Latest close</div></div>
+<div class="card"><div class="label">SIGNAL</div><div id="signal" class="value">—</div><div class="muted">Technical score <span id="score">—</span>/6</div></div>
+<div class="card"><div class="label">RSI</div><div id="rsi" class="value">—</div><div class="muted">14-period</div></div>
+<div class="card"><div class="label">VOLATILITY</div><div id="vol" class="value">—</div><div class="muted">20-day annualized</div></div>
+</div>
+<div class="card" style="margin-top:14px"><div id="chart" class="chart"></div></div>
+<div class="card" style="margin-top:14px"><h2>Technical Snapshot</h2><div class="row">
+<div><div class="label">Trend</div><div id="trend" class="value" style="font-size:22px">—</div></div>
+<div><div class="label">MACD</div><div id="macd" class="value" style="font-size:22px">—</div></div>
+<div><div class="label">Support</div><div id="support" class="value" style="font-size:22px">—</div></div>
+<div><div class="label">Resistance</div><div id="resistance" class="value" style="font-size:22px">—</div></div>
+<div><div class="label">ATR</div><div id="atr" class="value" style="font-size:22px">—</div></div>
+<div><div class="label">Risk/Reward</div><div id="rr" class="value" style="font-size:22px">—</div></div>
+</div></div>
+<div class="card" style="margin-top:14px"><h2>Technical Reasons</h2><div id="reasons" class="list muted">—</div></div>
+<div class="card" style="margin-top:14px"><h2>AI-style Technical Chat</h2><div id="chat" class="chat">Ask: “Why this signal?”, “What is the stop-loss?”, “Target?”, “Risk?”</div><div class="chatbox"><input id="question" placeholder="Ask about this stock"><button class="btn" style="height:46px" onclick="ask()">Ask</button></div></div>
+<div class="card" style="margin-top:14px"><h2>Backtest</h2><div class="muted small">Tests a transparent trend strategy on historical data with next-day execution.</div><button class="btn" style="height:46px;margin-top:10px" onclick="backtest()">Run 5Y Backtest</button><div id="backtest" class="chat"></div></div>
+<div class="notice">For research/education only. Signals are algorithmic technical indicators, not guaranteed outcomes or financial advice.</div>
+</div>
+<script>
+let last=null;
+function set(id,v){document.getElementById(id).textContent=v}
+async function analyse(){
+  const symbol=document.getElementById('symbol').value.trim();
+  set('status','Loading market data…');
+  try{
+    const r=await fetch('/api/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol})});
+    const d=await r.json(); if(d.error) throw new Error(d.error); last=d;
+    set('price','₹'+d.price); set('signal',d.signal); set('score',d.score); set('rsi',d.rsi); set('vol',d.volatility+'%');
+    set('trend',d.trend); set('macd',d.macd); set('support','₹'+d.support); set('resistance','₹'+d.resistance); set('atr','₹'+d.atr); set('rr',d.risk_reward+':1');
+    const s=document.getElementById('signal'); s.className='value '+d.signal.toLowerCase();
+    document.getElementById('reasons').innerHTML=d.reasons.length?d.reasons.map(x=>'• '+x).join('<br>'):'No bullish conditions matched.';
+    Plotly.newPlot('chart',[
+      {x:d.chart.dates,y:d.chart.close,name:d.symbol,type:'scatter',mode:'lines'},
+      {x:d.chart.dates,y:d.chart.sma20,name:'SMA20',type:'scatter',mode:'lines'},
+      {x:d.chart.dates,y:d.chart.sma50,name:'SMA50',type:'scatter',mode:'lines'},
+      {x:d.chart.dates,y:d.chart.bb_upper,name:'BB Upper',type:'scatter',mode:'lines',line:{dash:'dot'}},
+      {x:d.chart.dates,y:d.chart.bb_lower,name:'BB Lower',type:'scatter',mode:'lines',line:{dash:'dot'}}
+    ],{paper_bgcolor:'#0f1721',plot_bgcolor:'#0f1721',font:{color:'#dbe4ee'},margin:{l:35,r:10,t:25,b:35},legend:{orientation:'h'}},{responsive:true,displayModeBar:false});
+    set('status','Updated successfully • '+d.updated);
+  }catch(e){set('status','Error: '+e.message)}
+}
+async function ask(){
+  const message=document.getElementById('question').value.trim(); if(!message)return;
+  const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:document.getElementById('symbol').value,message})});
+  const d=await r.json(); document.getElementById('chat').textContent=d.reply;
+}
+async function backtest(){
+  set('backtest','Running…');
+  const r=await fetch('/api/backtest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:document.getElementById('symbol').value})});
+  const d=await r.json();
+  document.getElementById('backtest').textContent=d.error||`Strategy: ${d.strategy_return}% • Buy & hold: ${d.buy_hold_return}% • Max drawdown: ${d.max_drawdown}% • Trades: ${d.trades}. ${d.message}`;
+}
+analyse();
+</script>
+</body>
+</html>
