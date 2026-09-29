@@ -150,7 +150,7 @@ def analyze(symbol):
 
 @app.route("/")
 def home():
-    return render_template("index.html")
+    return open("index.html", encoding="utf-8").read()
 
 @app.post("/api/analyze")
 def api_analyze():
