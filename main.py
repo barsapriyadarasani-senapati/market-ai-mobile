@@ -10,7 +10,7 @@ import feedparser
 import requests
 from datetime import datetime, timedelta
 
-BASE = Path(__file__).resolve().parent.parent
+BASE = Path(__file__).resolve().parent
 app = FastAPI(title="Market AI Mobile")
 
 def sym(s):
@@ -229,7 +229,8 @@ def market_status():
 
 
 # Serve frontend
-app.mount("/static", StaticFiles(directory=str(BASE/"frontend")), name="static")
+app.mount("/static", StaticFiles(directory=str(BASE)), name="static")
+
 @app.get("/")
 def root():
-    return FileResponse(BASE/"frontend"/"index.html")
+    return FileResponse(BASE/"index.html")
