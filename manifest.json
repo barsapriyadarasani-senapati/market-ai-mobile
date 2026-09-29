@@ -1,9 +1,0 @@
-{
-  "name":"Market AI Mobile",
-  "short_name":"MarketAI",
-  "start_url":"/",
-  "display":"standalone",
-  "background_color":"#070b14",
-  "theme_color":"#0b1220",
-  "icons":[]
-}
