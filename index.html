@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b1220">
+<link rel="manifest" href="/static/manifest.json">
+<title>Market AI Mobile</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4"></script>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#070b14;color:#eef2ff;font-family:system-ui,-apple-system,sans-serif}
+.app{max-width:720px;margin:auto;padding-bottom:80px}.top{position:sticky;top:0;z-index:5;background:#070b14ee;backdrop-filter:blur(12px);padding:14px 14px 10px;border-bottom:1px solid #1d2638}
+h1{font-size:21px;margin:0 0 10px}.search{display:flex;gap:8px}.search input{flex:1;background:#111827;border:1px solid #29344a;color:white;padding:12px;border-radius:12px;font-size:16px}.btn{border:0;border-radius:12px;background:#4f7cff;color:white;padding:12px 14px;font-weight:700}
+nav{display:flex;overflow:auto;gap:8px;padding:10px 14px}.pill{background:#111827;color:#b8c3d9;border:1px solid #263149;padding:9px 13px;border-radius:20px;white-space:nowrap}.active{background:#243a75;color:white}
+main{padding:0 14px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.card{background:#101725;border:1px solid #202b40;border-radius:16px;padding:14px;margin:10px 0}.big{font-size:27px;font-weight:800}.muted{color:#93a0b8}.signal{font-size:18px;font-weight:800}.green{color:#36d399}.red{color:#ff6b81}.yellow{color:#ffd166}.metric{font-size:13px;color:#93a0b8}.row{display:flex;justify-content:space-between;gap:10px;align-items:center}.list{padding:10px 0;border-bottom:1px solid #202b40}.chat{min-height:45px}.msg{padding:11px;border-radius:13px;margin:8px 0;background:#141d2d}.user{background:#1d315f}.chatbox{display:flex;gap:7px;position:sticky;bottom:8px}.chatbox input{flex:1;background:#111827;border:1px solid #29344a;color:white;border-radius:12px;padding:12px}.hidden{display:none}canvas{max-height:360px}.small{font-size:12px}.tag{display:inline-block;padding:5px 8px;background:#1a2435;border-radius:8px;margin:3px;font-size:12px}
+</style>
+</head>
+<body>
+<div class="app">
+<header class="top">
+<h1>📈 Market AI</h1>
+<div class="search"><input id="symbol" value="RELIANCE" placeholder="NSE symbol"><button class="btn" onclick="loadAll()">Analyze</button></div>
+</header>
+<nav>
+<button class="pill active" onclick="show('dashboard',this)">Dashboard</button>
+<button class="pill" onclick="show('screener',this)">Screener</button>
+<button class="pill" onclick="show('portfolio',this)">Portfolio</button>
+<button class="pill" onclick="show('risk',this)">Risk</button><button class="pill" onclick="show('more',this)">More</button><button class="pill" onclick="show('chat',this)">AI Chat</button>
+</nav>
+<main>
+<section id="dashboard">
+<div class="card"><div class="muted" id="name">RELIANCE</div><div class="row"><div class="big" id="price">—</div><div id="change">—</div></div><div id="signal" class="signal">Loading…</div></div>
+<div class="grid"><div class="card"><div class="metric">Model score</div><div class="big" id="score">—</div></div><div class="card"><div class="metric">Confidence</div><div class="big" id="conf">—</div></div><div class="card"><div class="metric">RSI</div><div class="big" id="rsi">—</div></div><div class="card"><div class="metric">ATR</div><div class="big" id="atr">—</div></div></div>
+<div class="card"><canvas id="chart"></canvas></div>
+<div class="card"><h3>Why this signal?</h3><div id="reasons"></div></div>
+<div class="card"><h3>Fundamentals</h3><div id="fundamentals"></div></div>
+<div class="card"><h3>Backtest</h3><div id="backtest">Loading…</div></div>
+<div class="card"><h3>Latest news</h3><div id="news">Loading…</div></div>
+</section>
+
+<section id="screener" class="hidden"><div class="card"><h2>NSE Screener</h2><p class="muted">Change the list in the box if needed.</p><input id="symbols" class="search" style="width:100%;background:#111827;border:1px solid #29344a;color:white;padding:12px;border-radius:12px" value="RELIANCE,TCS,HDFCBANK,INFY,ICICIBANK,SBIN,ITC,LT,BHARTIARTL"><button class="btn" style="margin-top:8px" onclick="screen()">Scan</button><div id="screenout"></div></div></section>
+
+<section id="portfolio" class="hidden"><div class="card"><h2>Portfolio</h2><p class="muted">Saved only in this browser.</p><div class="row"><input id="psym" placeholder="Symbol" style="width:30%;padding:10px;background:#111827;color:white;border:1px solid #29344a;border-radius:9px"><input id="pqty" placeholder="Qty" type="number" style="width:25%;padding:10px;background:#111827;color:white;border:1px solid #29344a;border-radius:9px"><input id="pavg" placeholder="Avg" type="number" style="width:25%;padding:10px;background:#111827;color:white;border:1px solid #29344a;border-radius:9px"><button class="btn" onclick="addPos()">+</button></div><div id="positions"></div></div></section>
+
+
+<section id="risk" class="hidden">
+<div class="card"><h2>🛡️ Risk & Position Size</h2>
+<p class="muted">Calculate position size from the amount you are willing to risk.</p>
+<div class="grid">
+<input id="rentry" placeholder="Entry price" type="number" style="padding:11px;background:#111827;color:white;border:1px solid #29344a;border-radius:9px">
+<input id="rstop" placeholder="Stop price" type="number" style="padding:11px;background:#111827;color:white;border:1px solid #29344a;border-radius:9px">
+<input id="rcapital" placeholder="Capital" type="number" value="100000" style="padding:11px;background:#111827;color:white;border:1px solid #29344a;border-radius:9px">
+<input id="rrisk" placeholder="Risk %" type="number" value="1" step="0.1" style="padding:11px;background:#111827;color:white;border:1px solid #29344a;border-radius:9px">
+</div>
+<button class="btn" style="margin-top:10px" onclick="calcRisk()">Calculate</button>
+<div id="riskout"></div></div>
+</section>
+
+<section id="more" class="hidden">
+<div class="card"><h2>🌐 Market Context</h2><div id="mktstatus">Loading…</div></div>
+<div class="card"><h2>🏦 FII / DII</h2><div id="fiidii">Loading…</div></div>
+<div class="card"><h2>📅 Earnings</h2><div id="earnings">Loading…</div></div>
+<div class="card"><h2>⚙️ Options</h2><div id="options">Loading…</div></div>
+<div class="card"><h2>🔔 Local Alerts</h2><p class="muted">Browser notifications require permission and may depend on the device/browser.</p>
+<input id="alertPrice" type="number" placeholder="Alert price" style="padding:11px;background:#111827;color:white;border:1px solid #29344a;border-radius:9px"><button class="btn" onclick="saveAlert()">Save</button><div id="alerts"></div></div>
+</section>
+
+<section id="chat" class="hidden"><div class="card"><h2>💬 AI Research Chat</h2><div id="messages"></div><div class="chatbox"><input id="question" placeholder="Why is this stock bullish?"><button class="btn" onclick="ask()">Send</button></div></div></section>
+</main>
+</div>
+<script>
+let current="RELIANCE", chart;
+const $=id=>document.getElementById(id);
+function show(id,b){['dashboard','screener','portfolio','risk','more','chat'].forEach(x=>$(x).classList.add('hidden'));$(id).classList.remove('hidden');document.querySelectorAll('.pill').forEach(x=>x.classList.remove('active'));b?.classList.add('active');if(id==='portfolio')renderPos();if(id==='screener')screen();if(id==='more')loadMore()}
+async function api(url,opt){let r=await fetch(url,opt);if(!r.ok)throw Error(await r.text());return r.json()}
+async function loadAll(){
+ current=$('symbol').value.trim().toUpperCase().replace('.NS',''); $('name').textContent=current;
+ try{
+  let q=await api('/api/quote?symbol='+encodeURIComponent(current)); let a=q.analysis;
+  $('price').textContent='₹'+Number(q.price).toLocaleString('en-IN',{maximumFractionDigits:2});
+  $('change').textContent=(q.changePct>=0?'+':'')+q.changePct.toFixed(2)+'%';$('change').className=q.changePct>=0?'green':'red';
+  $('signal').textContent=a.signal;$('signal').className='signal '+(a.score>=45?'green':a.score<=-35?'red':'yellow');
+  $('score').textContent=a.score;$('conf').textContent=a.confidence+'%';$('rsi').textContent=a.rsi;$('atr').textContent=a.atr?Number(a.atr).toFixed(2):'—';
+  $('reasons').innerHTML=a.reasons.map(x=>'<div class="list">• '+x+'</div>').join('');
+  $('fundamentals').innerHTML=Object.entries(q.fundamentals).filter(x=>x[1]!=null).map(x=>'<span class="tag">'+x[0]+': '+(typeof x[1]==='number'?Number(x[1]).toFixed(2):x[1])+'</span>').join('')||'Unavailable';
+  let data=await api('/api/chart?symbol='+current+'&period=1y'); draw(data);
+  let bt=await api('/api/backtest?symbol='+current); $('backtest').innerHTML=bt.error||`₹${bt.initial.toLocaleString()} → <b>₹${bt.final.toLocaleString()}</b> (${bt.returnPct>=0?'+':''}${bt.returnPct}%) · ${bt.trades} signal trades`;
+  let ns=await api('/api/news?symbol='+current); $('news').innerHTML=ns.map(n=>`<div class="list"><b>${n.title}</b><div class="small muted">${n.published}</div><a href="${n.link}" target="_blank">Read</a></div>`).join('')||'No news';
+ }catch(e){$('signal').textContent='Data unavailable';console.error(e)}
+}
+function draw(d){
+ let ctx=$('chart').getContext('2d'); if(chart)chart.destroy();
+ chart=new Chart(ctx,{type:'line',data:{labels:d.map(x=>x.date),datasets:[
+ {label:'Price',data:d.map(x=>x.Close),borderWidth:2,pointRadius:0},
+ {label:'SMA50',data:d.map(x=>x.SMA50),borderWidth:1,pointRadius:0},
+ {label:'SMA200',data:d.map(x=>x.SMA200),borderWidth:1,pointRadius:0}]},
+ options:{responsive:true,plugins:{legend:{labels:{color:'#ccd5e5'}}},scales:{x:{ticks:{color:'#7f8ca6',maxTicksLimit:6}},y:{ticks:{color:'#7f8ca6'}}}}});
+}
+async function screen(){try{let s=await api('/api/screener?symbols='+encodeURIComponent($('symbols').value));$('screenout').innerHTML=s.map(x=>`<div class="list row"><b>${x.symbol}</b><span>₹${Number(x.price).toFixed(2)}</span><span class="${x.score>=45?'green':x.score<=-35?'red':'yellow'}">${x.signal}<br>${x.score}</span></div>`).join('')}catch(e){}}
+function getPos(){return JSON.parse(localStorage.getItem('mai_positions')||'[]')}
+function addPos(){let p=getPos();p.push({s:$('psym').value.toUpperCase(),q:+$('pqty').value,a:+$('pavg').value});localStorage.setItem('mai_positions',JSON.stringify(p));renderPos()}
+function renderPos(){$('positions').innerHTML=getPos().map((p,i)=>`<div class="list row"><span><b>${p.s}</b><br>${p.q} × ₹${p.a}</span><button class="pill" onclick="delPos(${i})">Delete</button></div>`).join('')||'No positions'}
+function delPos(i){let p=getPos();p.splice(i,1);localStorage.setItem('mai_positions',JSON.stringify(p));renderPos()}
+async function ask(){let q=$('question').value.trim();if(!q)return;$('messages').innerHTML+=`<div class="msg user">${q}</div>`;$('question').value='';let r=await api('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q,symbol:current})});$('messages').innerHTML+=`<div class="msg">${r.answer}</div>`}
+
+async function calcRisk(){try{let p=await api(`/api/risk?entry=${$('rentry').value}&stop=${$('rstop').value}&capital=${$('rcapital').value}&riskPct=${$('rrisk').value}`);$('riskout').innerHTML=`<div class="card"><b>Maximum quantity: ${p.maxQty}</b><br>Risk/share: ₹${p.riskPerShare}<br>Maximum loss: ₹${p.maxLoss}<br>Position value: ₹${p.positionValue}</div>`}catch(e){$('riskout').textContent='Enter valid values.'}}
+async function loadMore(){
+ try{let m=await api('/api/market-status');$('mktstatus').innerHTML=JSON.stringify(m).slice(0,1800)}catch(e){$('mktstatus').textContent='Unavailable'}
+ try{let f=await api('/api/fii-dii');$('fiidii').innerHTML=f.available?'<pre style="white-space:pre-wrap">'+JSON.stringify(f.data,null,2).slice(0,5000)+'</pre>':f.message}catch(e){$('fiidii').textContent='Unavailable'}
+ try{let e=await api('/api/earnings?symbol='+current);$('earnings').innerHTML='<pre style="white-space:pre-wrap">'+JSON.stringify(e,null,2).slice(0,2500)+'</pre>'}catch(e){$('earnings').textContent='Unavailable'}
+ try{let o=await api('/api/options?symbol='+current);$('options').innerHTML=o.chains?.length?o.chains.map(c=>`<div class="list"><b>${c.expiry}</b> · Calls ${c.calls.length} · Puts ${c.puts.length}</div>`).join(''):'No options chain available'}catch(e){$('options').textContent='Unavailable'}
+ renderAlerts()
+}
+function getAlerts(){return JSON.parse(localStorage.getItem('mai_alerts')||'[]')}
+function saveAlert(){let p=getAlerts();p.push({s:current,price:+$('alertPrice').value,created:new Date().toISOString()});localStorage.setItem('mai_alerts',JSON.stringify(p));renderAlerts()}
+function renderAlerts(){$('alerts').innerHTML=getAlerts().map((a,i)=>`<div class="list row"><span>${a.s} → ₹${a.price}</span><button class="pill" onclick="delAlert(${i})">Delete</button></div>`).join('')||'No alerts'}
+function delAlert(i){let p=getAlerts();p.splice(i,1);localStorage.setItem('mai_alerts',JSON.stringify(p));renderAlerts()}
+
+loadAll();
+</script>
+</body>
+</html>
