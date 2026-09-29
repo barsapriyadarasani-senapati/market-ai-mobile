@@ -1,19 +1,17 @@
 import os
-import math
+import json
 import time
-from datetime import datetime
-from functools import lru_cache
+from datetime import datetime, timezone
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
 
 from flask import Flask, request, jsonify
 import pandas as pd
 import numpy as np
-import yfinance as yf
 
 app = Flask(__name__)
 
-# Simple server-side cache. This prevents repeated Analyse taps from
-# immediately hitting Yahoo Finance again.
-CACHE_SECONDS = 600  # 10 minutes
+CACHE_SECONDS = 600
 _data_cache = {}
 
 def normalize_symbol(symbol):
@@ -22,98 +20,117 @@ def normalize_symbol(symbol):
         return ""
     return s if "." in s else s + ".NS"
 
-def _cached(symbol, period, interval):
-    key = (symbol, period, interval)
+def period_seconds(period):
+    return {
+        "1mo": 31 * 86400,
+        "3mo": 93 * 86400,
+        "6mo": 186 * 86400,
+        "1y": 366 * 86400,
+        "2y": 2 * 366 * 86400,
+        "5y": 5 * 366 * 86400,
+    }.get(period, 366 * 86400)
+
+def cache_get(key):
     item = _data_cache.get(key)
-    if item and (time.time() - item["time"] < CACHE_SECONDS):
+    if item and time.time() - item["time"] < CACHE_SECONDS:
         return item["data"].copy()
     return None
 
-def _save_cache(symbol, period, interval, df):
-    _data_cache[(symbol, period, interval)] = {
-        "time": time.time(),
-        "data": df.copy()
-    }
+def cache_put(key, df):
+    _data_cache[key] = {"time": time.time(), "data": df.copy()}
 
 def fetch_data(symbol, period="1y", interval="1d"):
     ticker = normalize_symbol(symbol)
     if not ticker:
         return "", pd.DataFrame(), "Please enter a stock symbol."
 
-    cached = _cached(ticker, period, interval)
+    key = (ticker, period, interval)
+    cached = cache_get(key)
     if cached is not None:
         return ticker, cached, None
 
-    last_error = None
-
-    # Only a small number of retries. The important part is that a rate-limit
-    # response becomes a normal JSON error instead of crashing the worker.
-    for attempt in range(2):
-        try:
-            df = yf.download(
-                ticker,
-                period=period,
-                interval=interval,
-                auto_adjust=False,
-                progress=False,
-                threads=False,
-            )
-
-            if df is None or df.empty:
-                last_error = "Yahoo Finance returned no data."
-                break
-
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-
-            needed = ["Open", "High", "Low", "Close", "Volume"]
-            for c in needed:
-                if c not in df.columns:
-                    df[c] = np.nan
-
-            df = df[needed].dropna(subset=["Close"]).copy()
-
-            if df.empty:
-                last_error = "No usable price data was returned."
-                break
-
-            _save_cache(ticker, period, interval, df)
-            return ticker, df, None
-
-        except Exception as exc:
-            last_error = str(exc)
-            # Do not hammer a rate-limited endpoint.
-            if "RateLimit" in last_error or "Too Many Requests" in last_error:
-                break
-            if attempt == 0:
-                time.sleep(1)
-
-    return ticker, pd.DataFrame(), (
-        "Market-data provider is temporarily rate-limiting this app. "
-        "Please wait a few minutes and try again. "
-        f"Details: {last_error or 'unknown error'}"
+    now = int(time.time())
+    start = now - period_seconds(period)
+    url = (
+        "https://query1.finance.yahoo.com/v8/finance/chart/"
+        + ticker
+        + f"?period1={start}&period2={now}&interval={interval}"
+        + "&events=history&includeAdjustedClose=true"
     )
+
+    req = Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Android; Mobile) AppleWebKit/537.36 "
+                          "Chrome/128.0 Mobile Safari/537.36",
+            "Accept": "application/json,text/plain,*/*",
+        },
+    )
+
+    try:
+        with urlopen(req, timeout=15) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        result = payload.get("chart", {}).get("result")
+        if not result:
+            err = payload.get("chart", {}).get("error")
+            msg = err.get("description") if isinstance(err, dict) else None
+            return ticker, pd.DataFrame(), msg or "Market-data provider returned no data."
+
+        result = result[0]
+        timestamps = result.get("timestamp") or []
+        quote = (result.get("indicators", {}).get("quote") or [{}])[0]
+
+        if not timestamps:
+            return ticker, pd.DataFrame(), "No historical market data was returned."
+
+        df = pd.DataFrame({
+            "Open": quote.get("open", []),
+            "High": quote.get("high", []),
+            "Low": quote.get("low", []),
+            "Close": quote.get("close", []),
+            "Volume": quote.get("volume", []),
+        }, index=pd.to_datetime(timestamps, unit="s", utc=True))
+
+        df.index = df.index.tz_convert(None)
+        df = df.apply(pd.to_numeric, errors="coerce").dropna(subset=["Close"])
+
+        if df.empty:
+            return ticker, pd.DataFrame(), "No usable closing prices were returned."
+
+        cache_put(key, df)
+        return ticker, df, None
+
+    except HTTPError as exc:
+        if exc.code == 429:
+            return ticker, pd.DataFrame(), (
+                "Market-data provider is temporarily rate-limiting this server. "
+                "Please wait a few minutes before trying again."
+            )
+        return ticker, pd.DataFrame(), f"Market-data HTTP error {exc.code}."
+    except URLError:
+        return ticker, pd.DataFrame(), "Could not reach the market-data provider."
+    except Exception as exc:
+        return ticker, pd.DataFrame(), f"Market-data error: {exc}"
 
 def indicators(df):
     x = df.copy()
-    c = x["Close"]
-    h, l = x["High"], x["Low"]
+    c, h, l = x["Close"], x["High"], x["Low"]
 
     x["SMA20"] = c.rolling(20).mean()
     x["SMA50"] = c.rolling(50).mean()
     x["EMA20"] = c.ewm(span=20, adjust=False).mean()
 
     delta = c.diff()
-    gain = delta.clip(lower=0).ewm(alpha=1 / 14, adjust=False).mean()
-    loss = (-delta.clip(upper=0)).ewm(alpha=1 / 14, adjust=False).mean()
+    gain = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
+    loss = (-delta.clip(upper=0)).ewm(alpha=1/14, adjust=False).mean()
     rs = gain / loss.replace(0, np.nan)
-    x["RSI"] = 100 - (100 / (1 + rs))
+    x["RSI"] = 100 - 100 / (1 + rs)
 
     ema12 = c.ewm(span=12, adjust=False).mean()
     ema26 = c.ewm(span=26, adjust=False).mean()
     x["MACD"] = ema12 - ema26
     x["MACDSignal"] = x["MACD"].ewm(span=9, adjust=False).mean()
-    x["MACDHist"] = x["MACD"] - x["MACDSignal"]
 
     mid = c.rolling(20).mean()
     std = c.rolling(20).std()
@@ -121,26 +138,18 @@ def indicators(df):
     x["BBUpper"] = mid + 2 * std
     x["BBLower"] = mid - 2 * std
 
-    tr = pd.concat(
-        [h - l, (h - c.shift()).abs(), (l - c.shift()).abs()],
-        axis=1
-    ).max(axis=1)
+    tr = pd.concat([
+        h - l,
+        (h - c.shift()).abs(),
+        (l - c.shift()).abs()
+    ], axis=1).max(axis=1)
     x["ATR14"] = tr.rolling(14).mean()
 
-    ret = c.pct_change()
-    x["Volatility20"] = ret.rolling(20).std() * np.sqrt(252) * 100
-    x["Return1D"] = ret * 100
-
+    x["Volatility20"] = c.pct_change().rolling(20).std() * np.sqrt(252) * 100
     return x.dropna().copy()
 
 def build_signal(x):
-    if x.empty:
-        return {"signal": "N/A", "score": 0, "confidence": 0, "reasons": []}
-
     r = x.iloc[-1]
-    score = 0
-    reasons = []
-
     tests = [
         (r["Close"] > r["SMA20"], "Price above SMA20"),
         (r["Close"] > r["SMA50"], "Price above SMA50"),
@@ -149,37 +158,21 @@ def build_signal(x):
         (r["MACD"] > r["MACDSignal"], "MACD bullish"),
         (r["Close"] > r["BBMid"], "Price above Bollinger midline"),
     ]
-
-    for ok, reason in tests:
-        if bool(ok):
-            score += 1
-            reasons.append(reason)
-
-    if score >= 5:
-        signal = "BUY"
-    elif score <= 1:
-        signal = "SELL"
-    else:
-        signal = "HOLD"
-
+    reasons = [reason for ok, reason in tests if bool(ok)]
+    score = len(reasons)
+    signal = "BUY" if score >= 5 else "SELL" if score <= 1 else "HOLD"
     confidence = round(min(95, 50 + abs(score - 3) * 12.5))
-    return {
-        "signal": signal,
-        "score": score,
-        "confidence": confidence,
-        "reasons": reasons,
-    }
+    return {"signal": signal, "score": score, "confidence": confidence, "reasons": reasons}
 
 def levels(x):
     r = x.iloc[-1]
     price = float(r["Close"])
-    atr = float(r["ATR14"]) if pd.notna(r["ATR14"]) else price * 0.02
+    atr = float(r["ATR14"])
     support = float(x["Low"].tail(20).min())
     resistance = float(x["High"].tail(20).max())
     stop = max(0.01, price - 1.5 * atr)
-    target = price + 2.0 * atr
+    target = price + 2 * atr
     rr = (target - price) / max(price - stop, 1e-9)
-
     return {
         "support": round(support, 2),
         "resistance": round(resistance, 2),
@@ -189,30 +182,26 @@ def levels(x):
         "risk_reward": round(rr, 2),
     }
 
-def serialize_chart(x):
+def chart_data(x):
     y = x.tail(180)
     return {
         "dates": [d.strftime("%Y-%m-%d") for d in y.index],
         "close": [round(float(v), 2) for v in y["Close"]],
-        "sma20": [None if pd.isna(v) else round(float(v), 2) for v in y["SMA20"]],
-        "sma50": [None if pd.isna(v) else round(float(v), 2) for v in y["SMA50"]],
-        "bb_upper": [None if pd.isna(v) else round(float(v), 2) for v in y["BBUpper"]],
-        "bb_lower": [None if pd.isna(v) else round(float(v), 2) for v in y["BBLower"]],
+        "sma20": [round(float(v), 2) for v in y["SMA20"]],
+        "sma50": [round(float(v), 2) for v in y["SMA50"]],
+        "bb_upper": [round(float(v), 2) for v in y["BBUpper"]],
+        "bb_lower": [round(float(v), 2) for v in y["BBLower"]],
     }
 
 def analyze(symbol, period="1y"):
-    ticker, raw, error = fetch_data(symbol, period=period)
+    ticker, raw, error = fetch_data(symbol, period)
     if error:
         return {"error": error}
-
     x = indicators(raw)
     if x.empty:
         return {"error": "Not enough historical data to calculate indicators."}
 
-    sig = build_signal(x)
-    lev = levels(x)
     r = x.iloc[-1]
-
     return {
         "ticker": ticker,
         "symbol": symbol.upper(),
@@ -222,98 +211,65 @@ def analyze(symbol, period="1y"):
         "macd_signal": round(float(r["MACDSignal"]), 4),
         "volatility": round(float(r["Volatility20"]), 2),
         "trend": "Bullish" if r["Close"] > r["SMA50"] else "Bearish",
-        **sig,
-        **lev,
-        "chart": serialize_chart(x),
+        **build_signal(x),
+        **levels(x),
+        "chart": chart_data(x),
         "updated": datetime.now().strftime("%d %b %Y, %I:%M %p"),
+        "data_source": "Yahoo Finance chart data",
     }
 
 @app.route("/")
 def home():
     try:
-        with open("index.html", encoding="utf-8") as f:
-            return f.read()
+        return open("index.html", encoding="utf-8").read()
     except Exception as exc:
-        return jsonify({"error": f"Frontend file error: {exc}"}), 500
+        return jsonify({"error": str(exc)}), 500
 
 @app.post("/api/analyze")
 def api_analyze():
     try:
         data = request.get_json(silent=True) or {}
-        result = analyze(data.get("symbol", ""))
-        return jsonify(result)
+        return jsonify(analyze(data.get("symbol", "")))
     except Exception as exc:
-        app.logger.exception("Analyze endpoint failed")
-        return jsonify({
-            "error": "Analysis failed safely. Please try again later.",
-            "details": str(exc)
-        }), 500
+        app.logger.exception("Analyze failed")
+        return jsonify({"error": f"Analysis failed safely: {exc}"}), 500
 
 @app.post("/api/chat")
 def api_chat():
     try:
         data = request.get_json(silent=True) or {}
         symbol = data.get("symbol", "")
-        question = (data.get("message", "") or "").strip().lower()
+        question = (data.get("message", "") or "").lower().strip()
         result = analyze(symbol)
 
         if "error" in result:
             return jsonify({"reply": result["error"]})
 
         if "stop" in question or "sl" in question:
-            reply = (
-                f"For {result['symbol'].upper()}, ATR-based stop is around "
-                f"₹{result['stop_loss']} and recent 20-day support is "
-                f"₹{result['support']}. These are technical reference levels, "
-                "not guarantees."
-            )
+            reply = f"ATR-based stop reference: ₹{result['stop_loss']}. Recent 20-day support: ₹{result['support']}."
         elif "target" in question:
-            reply = (
-                f"ATR-based technical target is around ₹{result['target']}; "
-                f"recent 20-day resistance is ₹{result['resistance']}."
-            )
-        elif "why" in question or "signal" in question:
-            reply = (
-                f"The current technical signal is {result['signal']} with "
-                f"score {result['score']}/6. "
-                + ("; ".join(result["reasons"])
-                   if result["reasons"] else
-                   "Most tracked conditions are not bullish.")
-            )
+            reply = f"ATR-based target reference: ₹{result['target']}. Recent 20-day resistance: ₹{result['resistance']}."
         elif "risk" in question:
-            reply = (
-                f"20-day annualized volatility is about {result['volatility']}%. "
-                f"Risk/reward from the ATR reference levels is about "
-                f"{result['risk_reward']}:1."
-            )
+            reply = f"20-day annualized volatility: {result['volatility']}%. Reference risk/reward: {result['risk_reward']}:1."
+        elif "why" in question or "signal" in question:
+            reply = f"Signal: {result['signal']} ({result['score']}/6). " + "; ".join(result["reasons"])
         else:
-            reply = (
-                f"{result['symbol'].upper()} is ₹{result['price']}, "
-                f"RSI {result['rsi']}, trend {result['trend']}, "
-                f"technical signal {result['signal']} ({result['score']}/6). "
-                "Ask about signal, stop-loss, target, support, resistance or risk."
-            )
-
+            reply = f"{result['symbol']} is ₹{result['price']}, RSI {result['rsi']}, trend {result['trend']}, signal {result['signal']} ({result['score']}/6)."
         return jsonify({"reply": reply})
     except Exception as exc:
-        app.logger.exception("Chat endpoint failed")
-        return jsonify({
-            "reply": "Chat analysis failed safely. Please try again later.",
-            "details": str(exc)
-        }), 500
+        return jsonify({"reply": f"Chat failed safely: {exc}"}), 500
 
 @app.post("/api/backtest")
 def api_backtest():
     try:
         data = request.get_json(silent=True) or {}
-        ticker, raw, error = fetch_data(data.get("symbol", ""), period="5y")
-
+        ticker, raw, error = fetch_data(data.get("symbol", ""), "5y")
         if error:
             return jsonify({"error": error})
 
         x = indicators(raw)
         if len(x) < 60:
-            return jsonify({"error": "Not enough data for backtest."})
+            return jsonify({"error": "Not enough historical data for a 5-year backtest."})
 
         long_cond = (
             (x["Close"] > x["SMA20"])
@@ -321,36 +277,24 @@ def api_backtest():
             & (x["RSI"] > 50)
             & (x["MACD"] > x["MACDSignal"])
         )
-
         pos = long_cond.shift(1).fillna(False).astype(int)
         daily = x["Close"].pct_change().fillna(0)
         strat = pos * daily
         equity = (1 + strat).cumprod()
         bh = (1 + daily).cumprod()
-
-        total = (equity.iloc[-1] - 1) * 100
-        bh_total = (bh.iloc[-1] - 1) * 100
         dd = equity / equity.cummax() - 1
 
         return jsonify({
             "ticker": ticker,
-            "strategy_return": round(float(total), 2),
-            "buy_hold_return": round(float(bh_total), 2),
-            "max_drawdown": round(float(dd.min() * 100), 2),
-            "trades": int(pos.diff().abs().sum() / 2),
-            "message": (
-                "Backtest uses next-day execution to reduce look-ahead bias; "
-                "results are historical and not predictive."
-            ),
+            "strategy_return": round(float((equity.iloc[-1]-1)*100), 2),
+            "buy_hold_return": round(float((bh.iloc[-1]-1)*100), 2),
+            "max_drawdown": round(float(dd.min()*100), 2),
+            "trades": int(pos.diff().abs().sum()/2),
+            "message": "Historical backtest only; results are not predictive."
         })
     except Exception as exc:
-        app.logger.exception("Backtest endpoint failed")
-        return jsonify({
-            "error": "Backtest failed safely. Please try again later.",
-            "details": str(exc)
-        }), 500
+        return jsonify({"error": f"Backtest failed safely: {exc}"}), 500
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
     
