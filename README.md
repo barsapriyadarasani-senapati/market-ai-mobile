@@ -1,25 +1,27 @@
-# Market AI Mobile
+# Market AI Mobile V3
 
-A mobile-friendly FastAPI web app for Indian-market technical analysis.
+Mobile-friendly Flask stock-analysis dashboard for Indian markets.
 
 ## Features
-- NSE/BSE-style symbol lookup through Yahoo Finance market data
-- Price and chart view
+- NSE/BSE-style ticker input (NSE is default)
 - SMA20, SMA50, EMA20
-- RSI, MACD, Bollinger Bands and ATR calculations
-- Rule-based BUY/HOLD/SELL signal
-- Volatility/risk snapshot
-- Simple historical backtest
-- Screener API
-- AI-style chat endpoint
-- Render-ready deployment
-- No API key required for the initial market-data endpoint
+- RSI, MACD
+- Bollinger Bands
+- ATR
+- volatility
+- support/resistance
+- transparent 6-point technical signal
+- ATR-based stop/target reference
+- simple no-lookahead daily backtest
+- built-in technical chat assistant
+- Render-ready
+
+## Run
+pip install -r requirements.txt
+python app.py
 
 ## Render
-Build:
-`pip install -r requirements.txt`
+Build: `pip install -r requirements.txt`
+Start: `gunicorn app:app`
 
-Start:
-`uvicorn main:app --host 0.0.0.0 --port $PORT`
-
-The signal is an analytical rule, not a guarantee of future returns. Market data can be delayed or unavailable.
+This software is for research/education. It does not guarantee returns and is not financial advice.
